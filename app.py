@@ -36,6 +36,9 @@ import jdatetime
 
 DB_PATH = Path(__file__).parent / "matches.json"
 
+# آدرس دیپلوی‌شده‌ی اپ — برای ساختن لینک کامل قابل‌ارسال
+BASE_URL = "https://our-date-pashmakiana.streamlit.app/"
+
 st.set_page_config(
     page_title="A Special Invitation 💌",
     page_icon="💌",
@@ -262,12 +265,10 @@ def boy_setup_page():
 
     if st.session_state.get("generated_id"):
         invite_id = st.session_state.generated_id
-        st.success("لینکت آماده‌ست! این رو برای طرف مقابل بفرست 👇")
-        st.code(f"?id={invite_id}", language="text")
-        st.caption(
-            "این پارامتر رو به آدرس همین سایت اضافه کن (مثلا "
-            "your-app-url.streamlit.app/?id=... ) و لینک کامل رو برایش بفرست."
-        )
+        full_link = f"{BASE_URL}?id={invite_id}"
+        st.success("لینکت آماده‌ست! همین رو برای طرف مقابل بفرست 👇")
+        st.code(full_link, language="text")
+        st.link_button("🔗 خودت هم امتحانش کن", full_link, use_container_width=True)
 
 
 # ----------------------------------------------------------------------------
