@@ -4,17 +4,19 @@
 ------------------------------------------------------------
 یک اپلیکیشن استریم‌لیت دو مرحله‌ای:
 
-۱) پسر وارد سایت می‌شود، اطلاعات تماس (تلگرام یا شماره) و زمان‌های
-   پیشنهادی‌اش برای دیت را وارد می‌کند و یک لینک اختصاصی می‌سازد.
-2) او همان لینک را برای دختر ارسال می‌کند (از هر طریقی که خودش
+۱) پسر وارد سایت می‌شود، اسمش (و اسم طرف مقابل) و زمان‌های
+   پیشنهادی‌اش برای دیت را وارد می‌کند و یک لینک اختصاصی می‌سازد،
+   به‌همراه یک «لینک جواب» که برای خودش می‌ماند.
+2) او لینک دعوت را برای دختر ارسال می‌کند (از هر طریقی که خودش
    دوست دارد: تلگرام، واتساپ، پیامک و ...).
 ۳) دختر با کلیک روی لینک وارد یک صفحه‌ی رمانتیک می‌شود، به سوال
    «با من میای دیت؟» با Yes/No جواب می‌دهد (دکمه‌ی No فرار می‌کند
    و بعد از چند بار کلیک ناپدید می‌شود!)، بعد زمان، مکان و یک
    پیشنهاد اختیاری را انتخاب می‌کند.
-4) در پایان همه‌چیز در یک جدول خلاصه می‌شود و پیام به‌صورت کاملاً
-   خودکار (بدون نیاز به کلیک دختر روی هیچ دکمه‌ای) برای پسر ارسال
-   می‌شود — از طریق ربات تلگرام یا پیامک خودکار.
+4) در پایان همه‌چیز در یک جدول خلاصه می‌شود و مستقیم روی خودِ سایت
+   ذخیره می‌شود. پسر با باز کردن لینکِ «صفحه‌ی جواب» که برای خودش
+   دارد، همان‌جا نتیجه را می‌بیند — بدون نیاز به هیچ API یا ارسال
+   خارجی.
 
 اجرا:
     pip install -r requirements.txt
@@ -27,7 +29,6 @@ import uuid
 from datetime import datetime, date, time as dtime
 from pathlib import Path
 
-import requests
 import streamlit as st
 import jdatetime
 
@@ -130,47 +131,6 @@ def to_gregorian_display(dt: datetime) -> str:
     return dt.strftime("%A, %d %B %Y - %H:%M")
 
 
-def send_telegram_auto(bot_token: str, chat_id: str, text: str) -> tuple[bool, str]:
-    """Silently send a message via a Telegram bot — no click needed from the user."""
-    url = f"https://api.telegram.org/bot{bot_token.strip()}/sendMessage"
-    try:
-        r = requests.post(
-            url, data={"chat_id": chat_id.strip(), "text": text}, timeout=10
-        )
-        if r.ok and r.json().get("ok"):
-            return True, ""
-        return False, r.text
-    except Exception as e:
-        return False, str(e)
-
-
-def get_chat_id_from_updates(bot_token: str) -> str | None:
-    """Helper for the setup page: find the chat_id of whoever last messaged the bot."""
-    url = f"https://api.telegram.org/bot{bot_token.strip()}/getUpdates"
-    try:
-        r = requests.get(url, timeout=10)
-        results = r.json().get("result", [])
-        if results:
-            return str(results[-1]["message"]["chat"]["id"])
-    except Exception:
-        pass
-    return None
-
-
-def send_sms_auto(api_key: str, phone: str, text: str) -> tuple[bool, str]:
-    """Silently send an SMS via the Kavenegar API — no click needed from the user."""
-    url = f"https://api.kavenegar.com/v1/{api_key.strip()}/sms/send.json"
-    try:
-        r = requests.post(
-            url, data={"receptor": phone.strip(), "message": text}, timeout=10
-        )
-        if r.ok:
-            return True, ""
-        return False, r.text
-    except Exception as e:
-        return False, str(e)
-
-
 def inject_base_style() -> None:
     st.markdown(
         """
@@ -230,60 +190,8 @@ def boy_setup_page():
     if "slots" not in st.session_state:
         st.session_state.slots = []  # list of datetime objects
 
-    st.subheader("۱. اطلاعات تماس تو")
-    st.caption(
-        "جواب دختر کاملاً **خودکار** و بدون نیاز به کلیک کردنِ او روی هیچ "
-        "دکمه‌ای برات ارسال می‌شه — برای همین باید یکی از دو روش زیر رو "
-        "از قبل وصل کنی."
-    )
+    st.subheader("۱. اطلاعاتت")
     boy_name = st.text_input("اسمت (اختیاری)")
-    contact_type = st.radio(
-        "پیام نهایی از چه طریقی خودکار برات ارسال بشه؟",
-        ["تلگرام (ربات)", "پیامک (خودکار)"],
-        horizontal=True,
-    )
-
-    bot_token = ""
-    chat_id = ""
-    sms_api_key = ""
-    phone_number = ""
-
-    if contact_type == "تلگرام (ربات)":
-        with st.expander("راهنما: چطور توکن و Chat ID بگیرم؟", expanded=False):
-            st.markdown(
-                """
-                ۱. تو تلگرام به [@BotFather](https://t.me/BotFather) پیام بده و با
-                   دستور `/newbot` یه ربات بساز — یه **توکن** بهت می‌ده.\n
-                ۲. حالا از هر اکانتی، به همون ربات جدیدت پیام `/start` بده
-                   (باید از تلگرامِ خودت باشه، چون پیام نهایی همین‌جا برات
-                   ارسال می‌شه).\n
-                ۳. توکن رو پایین وارد کن و دکمه‌ی «دریافت خودکار Chat ID» رو بزن.
-                """
-            )
-        bot_token = st.text_input("توکن ربات تلگرام", type="password", placeholder="123456:ABC-DEF...")
-        if st.button("📥 دریافت خودکار Chat ID"):
-            if bot_token.strip():
-                found = get_chat_id_from_updates(bot_token)
-                if found:
-                    st.session_state.detected_chat_id = found
-                    st.success(f"پیدا شد ✅  Chat ID: {found}")
-                else:
-                    st.warning("چیزی پیدا نشد. اول به رباتت پیام /start بده، بعد دوباره امتحان کن.")
-            else:
-                st.warning("اول توکن رو وارد کن.")
-        chat_id = st.text_input("Chat ID", value=st.session_state.get("detected_chat_id", ""))
-    else:
-        with st.expander("راهنما: پیامک خودکار چطور کار می‌کنه؟", expanded=False):
-            st.markdown(
-                """
-                برای ارسال خودکار پیامک به یک حساب و API Key از یک سرویس
-                پیامکی (مثلاً [Kavenegar](https://kavenegar.com)) نیاز داری.
-                بعد از ساخت حساب، API Key رو از پنل کاربری‌ات کپی کن.
-                """
-            )
-        sms_api_key = st.text_input("API Key سرویس پیامکی", type="password")
-        phone_number = st.text_input("شماره موبایلت", placeholder="09xxxxxxxxx")
-
     girl_name = st.text_input("اسم طرف مقابل (اختیاری، برای شخصی‌سازی پیام)")
 
     st.divider()
@@ -315,21 +223,13 @@ def boy_setup_page():
         st.info("حداقل یک زمان اضافه کن.")
 
     st.divider()
-    ready = bool(st.session_state.slots) and (
-        (contact_type == "تلگرام (ربات)" and bot_token.strip() and chat_id.strip())
-        or (contact_type == "پیامک (خودکار)" and sms_api_key.strip() and phone_number.strip())
-    )
+    ready = bool(st.session_state.slots)
 
     if st.button("💖 لینک دعوت‌نامه رو بساز", disabled=not ready, use_container_width=True):
         invite_id = uuid.uuid4().hex[:10]
         data = {
             "boy_name": boy_name.strip(),
             "girl_name": girl_name.strip(),
-            "contact_type": "telegram_bot" if contact_type == "تلگرام (ربات)" else "sms_auto",
-            "bot_token": bot_token.strip(),
-            "chat_id": chat_id.strip(),
-            "sms_api_key": sms_api_key.strip(),
-            "phone_number": phone_number.strip(),
             "slots": [dt.isoformat() for dt in st.session_state.slots],
             "created_at": datetime.now().isoformat(),
         }
@@ -339,10 +239,22 @@ def boy_setup_page():
 
     if st.session_state.get("generated_id"):
         invite_id = st.session_state.generated_id
-        full_link = f"{BASE_URL}?id={invite_id}"
-        st.success("لینکت آماده‌ست! همین رو برای طرف مقابل بفرست 👇")
-        st.code(full_link, language="text")
-        st.link_button("🔗 خودت هم امتحانش کن", full_link, use_container_width=True)
+        invite_link = f"{BASE_URL}?id={invite_id}"
+        result_link = f"{BASE_URL}?result={invite_id}"
+
+        st.success("لینک دعوت آماده‌ست! این رو برای طرف مقابل بفرست 👇")
+        st.code(invite_link, language="text")
+        st.link_button("🔗 خودت هم امتحانش کن", invite_link, use_container_width=True)
+
+        st.divider()
+        st.subheader("۳. صفحه‌ی جواب تو")
+        st.write(
+            "این لینک رو برای خودت نگه دار (بوکمارکش کن) — هر وقت دوست داشتی "
+            "بازش کن تا ببینی جواب داده یا نه، و اگه داده، همه‌چیز رو همینجا "
+            "ببینی."
+        )
+        st.code(result_link, language="text")
+        st.link_button("👀 صفحه‌ی جواب من", result_link, use_container_width=True)
 
 
 # ----------------------------------------------------------------------------
@@ -550,6 +462,8 @@ def stage_summary(invite_id: str, data: dict):
         <div class="love-card">
             <div class="big-emoji">🎉</div>
             <h1>It's a date!</h1>
+            <p>Your answer has been saved 💌 He can check it on his own page —
+            you don't need to do anything else.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -568,38 +482,53 @@ def stage_summary(invite_id: str, data: dict):
     ) + "</table>"
     st.markdown(f"<div class='love-card'>{table_html}</div>", unsafe_allow_html=True)
 
-    message_lines = [
-        "💌 She said YES! 💖",
-        f"{data.get('girl_name') or 'She'} agreed to go on a date with you!",
-        "",
-        f"📅 {answer['shamsi_str']}",
-        f"🕒 {answer['slot_gregorian_str']}",
-        f"📍 {answer['location']}",
-    ]
-    if note:
-        message_lines.append(f"📝 Her note: {note}")
-    message_lines += ["", "Don't keep her waiting! 🥰"]
-    summary_text = "\n".join(message_lines)
 
-    # --- Auto-send, no button, no click needed from her ---------------------
-    if not st.session_state.get("send_attempted"):
-        st.session_state.send_attempted = True
-        ok, err = False, "No contact method was set up for this invitation."
-        if data.get("contact_type") == "telegram_bot" and data.get("bot_token") and data.get("chat_id"):
-            ok, err = send_telegram_auto(data["bot_token"], data["chat_id"], summary_text)
-        elif data.get("contact_type") == "sms_auto" and data.get("sms_api_key") and data.get("phone_number"):
-            ok, err = send_sms_auto(data["sms_api_key"], data["phone_number"], summary_text)
-        st.session_state.message_sent = ok
-        st.session_state.send_error = err
+# ----------------------------------------------------------------------------
+# PAGE: Boy — check the result (no API / no send button, just a page he checks)
+# ----------------------------------------------------------------------------
 
-    if st.session_state.get("message_sent"):
-        st.success("Sent! He already has your answer — no need to do anything else 💌")
-    else:
-        st.warning(
-            "Automatic sending didn't go through, so here's the message in case "
-            "you'd like to share it another way:"
+
+def boy_result_page(invite_id: str, data: dict):
+    inject_base_style()
+    answer = data.get("answer")
+
+    if not answer:
+        st.markdown(
+            f"""
+            <div class="love-card">
+                <div class="big-emoji">⏳</div>
+                <h1>Still waiting for her answer...</h1>
+                <p>Come back and refresh this page later 💌</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-        st.code(summary_text, language="text")
+        return
+
+    girl_name = data.get("girl_name") or "She"
+    st.markdown(
+        f"""
+        <div class="love-card">
+            <div class="big-emoji">🎉</div>
+            <h1>{girl_name} said YES!</h1>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    rows = [
+        ("📅 Date (Shamsi)", answer["shamsi_str"]),
+        ("🕒 Date (Gregorian)", answer["slot_gregorian_str"]),
+        ("📍 Place", answer["location"]),
+    ]
+    if answer.get("note"):
+        rows.append(("📝 Her note", answer["note"]))
+
+    table_html = "<table class='summary-table'>" + "".join(
+        f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows
+    ) + "</table>"
+    st.markdown(f"<div class='love-card'>{table_html}</div>", unsafe_allow_html=True)
+    st.caption("Don't keep her waiting! 🥰")
 
 
 # ----------------------------------------------------------------------------
@@ -609,6 +538,7 @@ def stage_summary(invite_id: str, data: dict):
 
 def main():
     invite_id = st.query_params.get("id")
+    result_id = st.query_params.get("result")
 
     if invite_id:
         data = get_invite(invite_id)
@@ -625,6 +555,21 @@ def main():
             )
             return
         girl_invite_page(invite_id, data)
+    elif result_id:
+        data = get_invite(result_id)
+        if data is None:
+            inject_base_style()
+            st.markdown(
+                """
+                <div class="love-card">
+                    <div class="big-emoji">💔</div>
+                    <h2>This results link is invalid or has expired.</h2>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            return
+        boy_result_page(result_id, data)
     else:
         boy_setup_page()
 
