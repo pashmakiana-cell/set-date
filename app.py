@@ -12,8 +12,9 @@
    «با من میای دیت؟» با Yes/No جواب می‌دهد (دکمه‌ی No فرار می‌کند
    و بعد از چند بار کلیک ناپدید می‌شود!)، بعد زمان، مکان و یک
    پیشنهاد اختیاری را انتخاب می‌کند.
-4) در پایان همه‌چیز در یک جدول خلاصه می‌شود و دختر می‌تواند با یک
-   کلیک، خلاصه را از طریق تلگرام یا پیامک برای پسر بفرستد.
+4) در پایان همه‌چیز در یک جدول خلاصه می‌شود و پیام به‌صورت کاملاً
+   خودکار (بدون نیاز به کلیک دختر روی هیچ دکمه‌ای) برای پسر ارسال
+   می‌شود — از طریق ربات تلگرام یا پیامک خودکار.
 
 اجرا:
     pip install -r requirements.txt
@@ -22,11 +23,11 @@
 
 import json
 import random
-import urllib.parse
 import uuid
 from datetime import datetime, date, time as dtime
 from pathlib import Path
 
+import requests
 import streamlit as st
 import jdatetime
 
@@ -129,14 +130,45 @@ def to_gregorian_display(dt: datetime) -> str:
     return dt.strftime("%A, %d %B %Y - %H:%M")
 
 
-def build_telegram_link(username: str, text: str) -> str:
-    username = username.strip().lstrip("@")
-    return f"https://t.me/{username}?text={urllib.parse.quote(text)}"
+def send_telegram_auto(bot_token: str, chat_id: str, text: str) -> tuple[bool, str]:
+    """Silently send a message via a Telegram bot — no click needed from the user."""
+    url = f"https://api.telegram.org/bot{bot_token.strip()}/sendMessage"
+    try:
+        r = requests.post(
+            url, data={"chat_id": chat_id.strip(), "text": text}, timeout=10
+        )
+        if r.ok and r.json().get("ok"):
+            return True, ""
+        return False, r.text
+    except Exception as e:
+        return False, str(e)
 
 
-def build_sms_link(phone: str, text: str) -> str:
-    phone = phone.strip()
-    return f"sms:{phone}?&body={urllib.parse.quote(text)}"
+def get_chat_id_from_updates(bot_token: str) -> str | None:
+    """Helper for the setup page: find the chat_id of whoever last messaged the bot."""
+    url = f"https://api.telegram.org/bot{bot_token.strip()}/getUpdates"
+    try:
+        r = requests.get(url, timeout=10)
+        results = r.json().get("result", [])
+        if results:
+            return str(results[-1]["message"]["chat"]["id"])
+    except Exception:
+        pass
+    return None
+
+
+def send_sms_auto(api_key: str, phone: str, text: str) -> tuple[bool, str]:
+    """Silently send an SMS via the Kavenegar API — no click needed from the user."""
+    url = f"https://api.kavenegar.com/v1/{api_key.strip()}/sms/send.json"
+    try:
+        r = requests.post(
+            url, data={"receptor": phone.strip(), "message": text}, timeout=10
+        )
+        if r.ok:
+            return True, ""
+        return False, r.text
+    except Exception as e:
+        return False, str(e)
 
 
 def inject_base_style() -> None:
@@ -199,17 +231,57 @@ def boy_setup_page():
         st.session_state.slots = []  # list of datetime objects
 
     st.subheader("۱. اطلاعات تماس تو")
+    st.caption(
+        "جواب دختر کاملاً **خودکار** و بدون نیاز به کلیک کردنِ او روی هیچ "
+        "دکمه‌ای برات ارسال می‌شه — برای همین باید یکی از دو روش زیر رو "
+        "از قبل وصل کنی."
+    )
     boy_name = st.text_input("اسمت (اختیاری)")
     contact_type = st.radio(
-        "بعد از جواب دادن، جواب از چه طریقی برات ارسال بشه؟",
-        ["تلگرام", "پیامک (SMS)"],
+        "پیام نهایی از چه طریقی خودکار برات ارسال بشه؟",
+        ["تلگرام (ربات)", "پیامک (خودکار)"],
         horizontal=True,
     )
-    telegram_username = ""
+
+    bot_token = ""
+    chat_id = ""
+    sms_api_key = ""
     phone_number = ""
-    if contact_type == "تلگرام":
-        telegram_username = st.text_input("یوزرنیم تلگرامت (بدون @)", placeholder="mahdi_xx")
+
+    if contact_type == "تلگرام (ربات)":
+        with st.expander("راهنما: چطور توکن و Chat ID بگیرم؟", expanded=False):
+            st.markdown(
+                """
+                ۱. تو تلگرام به [@BotFather](https://t.me/BotFather) پیام بده و با
+                   دستور `/newbot` یه ربات بساز — یه **توکن** بهت می‌ده.\n
+                ۲. حالا از هر اکانتی، به همون ربات جدیدت پیام `/start` بده
+                   (باید از تلگرامِ خودت باشه، چون پیام نهایی همین‌جا برات
+                   ارسال می‌شه).\n
+                ۳. توکن رو پایین وارد کن و دکمه‌ی «دریافت خودکار Chat ID» رو بزن.
+                """
+            )
+        bot_token = st.text_input("توکن ربات تلگرام", type="password", placeholder="123456:ABC-DEF...")
+        if st.button("📥 دریافت خودکار Chat ID"):
+            if bot_token.strip():
+                found = get_chat_id_from_updates(bot_token)
+                if found:
+                    st.session_state.detected_chat_id = found
+                    st.success(f"پیدا شد ✅  Chat ID: {found}")
+                else:
+                    st.warning("چیزی پیدا نشد. اول به رباتت پیام /start بده، بعد دوباره امتحان کن.")
+            else:
+                st.warning("اول توکن رو وارد کن.")
+        chat_id = st.text_input("Chat ID", value=st.session_state.get("detected_chat_id", ""))
     else:
+        with st.expander("راهنما: پیامک خودکار چطور کار می‌کنه؟", expanded=False):
+            st.markdown(
+                """
+                برای ارسال خودکار پیامک به یک حساب و API Key از یک سرویس
+                پیامکی (مثلاً [Kavenegar](https://kavenegar.com)) نیاز داری.
+                بعد از ساخت حساب، API Key رو از پنل کاربری‌ات کپی کن.
+                """
+            )
+        sms_api_key = st.text_input("API Key سرویس پیامکی", type="password")
         phone_number = st.text_input("شماره موبایلت", placeholder="09xxxxxxxxx")
 
     girl_name = st.text_input("اسم طرف مقابل (اختیاری، برای شخصی‌سازی پیام)")
@@ -244,8 +316,8 @@ def boy_setup_page():
 
     st.divider()
     ready = bool(st.session_state.slots) and (
-        (contact_type == "تلگرام" and telegram_username.strip())
-        or (contact_type == "پیامک (SMS)" and phone_number.strip())
+        (contact_type == "تلگرام (ربات)" and bot_token.strip() and chat_id.strip())
+        or (contact_type == "پیامک (خودکار)" and sms_api_key.strip() and phone_number.strip())
     )
 
     if st.button("💖 لینک دعوت‌نامه رو بساز", disabled=not ready, use_container_width=True):
@@ -253,8 +325,10 @@ def boy_setup_page():
         data = {
             "boy_name": boy_name.strip(),
             "girl_name": girl_name.strip(),
-            "contact_type": "telegram" if contact_type == "تلگرام" else "sms",
-            "telegram_username": telegram_username.strip(),
+            "contact_type": "telegram_bot" if contact_type == "تلگرام (ربات)" else "sms_auto",
+            "bot_token": bot_token.strip(),
+            "chat_id": chat_id.strip(),
+            "sms_api_key": sms_api_key.strip(),
             "phone_number": phone_number.strip(),
             "slots": [dt.isoformat() for dt in st.session_state.slots],
             "created_at": datetime.now().isoformat(),
@@ -507,18 +581,24 @@ def stage_summary(invite_id: str, data: dict):
     message_lines += ["", "Don't keep her waiting! 🥰"]
     summary_text = "\n".join(message_lines)
 
-    st.subheader("Send him the answer 💘")
+    # --- Auto-send, no button, no click needed from her ---------------------
+    if not st.session_state.get("send_attempted"):
+        st.session_state.send_attempted = True
+        ok, err = False, "No contact method was set up for this invitation."
+        if data.get("contact_type") == "telegram_bot" and data.get("bot_token") and data.get("chat_id"):
+            ok, err = send_telegram_auto(data["bot_token"], data["chat_id"], summary_text)
+        elif data.get("contact_type") == "sms_auto" and data.get("sms_api_key") and data.get("phone_number"):
+            ok, err = send_sms_auto(data["sms_api_key"], data["phone_number"], summary_text)
+        st.session_state.message_sent = ok
+        st.session_state.send_error = err
 
-    if data.get("contact_type") == "telegram" and data.get("telegram_username"):
-        link = build_telegram_link(data["telegram_username"], summary_text)
-        st.link_button("📨 Send via Telegram", link, use_container_width=True)
-    elif data.get("contact_type") == "sms" and data.get("phone_number"):
-        link = build_sms_link(data["phone_number"], summary_text)
-        st.link_button("📱 Send via SMS", link, use_container_width=True)
+    if st.session_state.get("message_sent"):
+        st.success("Sent! He already has your answer — no need to do anything else 💌")
     else:
-        st.warning("No contact method was set up for this invitation.")
-
-    with st.expander("Or copy the message manually"):
+        st.warning(
+            "Automatic sending didn't go through, so here's the message in case "
+            "you'd like to share it another way:"
+        )
         st.code(summary_text, language="text")
 
 
