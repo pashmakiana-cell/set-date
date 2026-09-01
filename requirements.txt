@@ -1,0 +1,2 @@
+streamlit>=1.32
+jdatetime>=4.1.0
